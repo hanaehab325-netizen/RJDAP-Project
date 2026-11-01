@@ -32,7 +32,69 @@ The server then collects the results from all workers.
 - Messages use a custom binary header containing Message Type, Task ID, Worker ID, Attempt Number, and Payload Checksum.
 - Task packets must comply with the project's 512-byte application payload limit.
 - Advanced reliability mechanisms will be developed and tested in Phase 2.
+## 2. Protocol Architecture
 
+### 2.1 Entities
+
+**Server (Command Hub).** A single UDP socket bound to 127.0.0.1:5000. It registers
+workers, owns a queue of 1,000 tasks, dispatches tasks, validates and acknowledges
+results, and logs every sent and received packet with a timestamp.
+
+**Worker (compute node).** At least four worker processes. Each worker is started
+with its own Worker ID, joins the server, executes the assigned computation (adding
+two integers), and returns the result.
+
+### 2.2 Task and Result Encoding (Phase 1)
+
+- TASK_DISPATCH payload: ASCII text "a:b" (two integers separated by a colon).
+- TASK_RESULT payload: ASCII text containing the sum a + b.
+- Tasks are generated from a fixed random seed, so every run is reproducible.
+
+### 2.3 Sequence Flow
+
+    Worker                                   Server (127.0.0.1:5000)
+      |------- WORKER_JOIN (Worker_ID) ------->|  register worker
+      |<------ TASK_DISPATCH (Task_ID, "a:b") -|
+      |   [compute a + b]                      |
+      |------- TASK_RESULT (sum) ------------->|  validate and store result
+      |<------ ACK_RESULT ---------------------|
+      |<------ TASK_DISPATCH (next task) ------|  repeat until all 1,000 are done
+      |<------ STOP ---------------------------|  all results received, worker exits
+
+The server sends one task at a time to each worker and sends the next task only after
+it has received and acknowledged the previous result. HEARTBEAT is defined in the
+protocol but is not used in Phase 1; it will be used for crash detection in Phase 2.
+STOP is a temporary raw message and will be replaced by a protocol message in Phase 2.
+
+### 2.4 Server Finite-State Machine
+
+| State | Event | Action | Next state |
+|---|---|---|---|
+| LISTENING | WORKER_JOIN (new valid ID) | Register worker, dispatch first task | LISTENING |
+| LISTENING | WORKER_JOIN (ID already registered) | Log and ignore | LISTENING |
+| LISTENING | TASK_RESULT (valid) | Store result, check it, send ACK_RESULT, dispatch next task | LISTENING |
+| LISTENING | TASK_RESULT (task already stored) | Log as duplicate, re-send ACK_RESULT | LISTENING |
+| LISTENING | TASK_RESULT (wrong worker, wrong address or invalid payload) | Log and drop | LISTENING |
+| LISTENING | Malformed packet (bad checksum, size or type) | Log and drop | LISTENING |
+| LISTENING | All 1,000 results stored, or 30 s idle timeout | Log summary, send STOP to workers | STOPPED |
+
+### 2.5 Worker Finite-State Machine
+
+JOINING (WORKER_JOIN sent) -> WAITING (for a task) -> COMPUTING -> WAITING (after
+TASK_RESULT is sent) -> STOPPED (when STOP is received).
+
+### 2.6 Server State
+
+The server keeps a worker registry (Worker ID to address), a map of which task was
+assigned to which worker, a map of received results, and a counter for the next task
+in the queue. Every packet is logged to logs/server.log.
+
+### 2.7 Phase 1 Assumptions and Phase 2 Extensions
+
+Loopback is assumed lossless in Phase 1, so no retransmission timers are used yet.
+The assignment map and the duplicate-result check are the foundation for Phase 2:
+timeout-based task reassignment, worker crash detection and exactly-once result
+handling.
 ## 2. Message Types
 
 | Message Type | Value | Purpose |
