@@ -3,6 +3,7 @@ import struct
 
 from protocol import (
     MessageType,
+    PROTOCOL_VERSION,
     HEADER_FORMAT,
     HEADER_SIZE,
     MAX_PAYLOAD_SIZE,
@@ -31,7 +32,30 @@ class TestProtocol(unittest.TestCase):
         self.assertEqual(received_payload, payload)
 
     def test_header_size(self):
-        self.assertEqual(HEADER_SIZE, 13)
+        self.assertEqual(HEADER_SIZE, 14)
+
+    def test_protocol_version(self):
+        message = encode_message(
+            MessageType.TASK_DISPATCH, 1, 1, 1, b"test"
+        )
+
+        version = struct.unpack(HEADER_FORMAT, message[:HEADER_SIZE])[0]
+
+        self.assertEqual(version, PROTOCOL_VERSION)
+
+    def test_unsupported_protocol_version(self):
+        invalid_header = struct.pack(
+            HEADER_FORMAT,
+            99,  # Unsupported version
+            int(MessageType.TASK_DISPATCH),
+            1,
+            1,
+            1,
+            0,  # Checksum; version validation happens first
+        )
+
+        with self.assertRaisesRegex(ValueError, "version"):
+            decode_message(invalid_header)
 
     def test_maximum_payload_allowed(self):
         payload = b"A" * MAX_PAYLOAD_SIZE
@@ -47,7 +71,7 @@ class TestProtocol(unittest.TestCase):
     def test_payload_too_large(self):
         payload = b"A" * (MAX_PAYLOAD_SIZE + 1)
 
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "512"):
             encode_message(
                 MessageType.TASK_DISPATCH, 1, 1, 1, payload
             )
@@ -64,12 +88,18 @@ class TestProtocol(unittest.TestCase):
             decode_message(bytes(corrupted))
 
     def test_message_shorter_than_header(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "shorter than header"):
             decode_message(b"\x01\x02")
 
     def test_invalid_message_type(self):
         invalid_header = struct.pack(
-            HEADER_FORMAT, 99, 100, 5, 1, 0
+            HEADER_FORMAT,
+            PROTOCOL_VERSION,
+            99,  # Invalid message type
+            100,
+            5,
+            1,
+            0,
         )
 
         with self.assertRaisesRegex(ValueError, "message type"):
