@@ -37,73 +37,72 @@ The server then collects the results from all workers.
 ### 2.1 Entities
 
 **Server (Command Hub).** A single UDP socket bound to 127.0.0.1:5000. It registers
-workers, owns a queue of 1,000 tasks, dispatches tasks, validates and acknowledges
-results, and logs every sent and received packet with a timestamp.
+exactly four workers, owns a queue of 1,000 tasks, dispatches tasks, acknowledges
+results, and logs every sent and received packet with a timestamp to the console and
+to server.log.
 
-**Worker (compute node).** At least four worker processes. Each worker is started
-with its own Worker ID, joins the server, executes the assigned computation (adding
-two integers), and returns the result.
+**Worker (compute node).** Four worker processes. Each worker is started with its own
+Worker ID (1 to 4), joins the server, executes the assigned computation (adding two
+integers), and returns the result.
 
 ### 2.2 Task and Result Encoding (Phase 1)
 
 - TASK_DISPATCH payload: ASCII text "a:b" (two integers separated by a colon).
 - TASK_RESULT payload: ASCII text containing the sum a + b.
-- Tasks are generated from a fixed random seed, so every run is reproducible.
+- Task N asks the worker to add N and 2N, so every run is identical and reproducible.
 
 ### 2.3 Sequence Flow
 
     Worker                                   Server (127.0.0.1:5000)
-      |------- WORKER_JOIN (Worker_ID) ------->|  register worker
-      |<------ TASK_DISPATCH (Task_ID, "a:b") -|
+      |------- WORKER_JOIN (Worker_ID) ------->|  register worker (no reply)
+      |        ... all 4 workers join ...      |
+      |<------ TASK_DISPATCH (Task_ID, "a:b") -|  sent once 4 workers are registered
       |   [compute a + b]                      |
       |------- TASK_RESULT (sum) ------------->|  validate and store result
       |<------ ACK_RESULT ---------------------|
       |<------ TASK_DISPATCH (next task) ------|  repeat until all 1,000 are done
       |<------ STOP ---------------------------|  all results received, worker exits
 
-The server sends one task at a time to each worker and sends the next task only after
-it has received and acknowledged the previous result. HEARTBEAT is defined in the
-protocol but is not used in Phase 1; it will be used for crash detection in Phase 2.
-STOP is a temporary raw message and will be replaced by a protocol message in Phase 2.
+The server does not start dispatching until all four workers have joined. After that it
+sends one task at a time to each worker and sends the next task only after it has
+received and acknowledged the previous result, so faster workers handle more tasks.
+HEARTBEAT is defined in the protocol but is not used in Phase 1; it will be used for
+crash detection in Phase 2. STOP is a temporary raw message and will be replaced by a
+protocol message in Phase 2.
 
 ### 2.4 Server Finite-State Machine
 
 | State | Event | Action | Next state |
 |---|---|---|---|
-| LISTENING | WORKER_JOIN (new valid ID) | Register worker, dispatch first task | LISTENING |
-| LISTENING | WORKER_JOIN (ID already registered) | Log and ignore | LISTENING |
-| LISTENING | TASK_RESULT (valid) | Store result, check it, send ACK_RESULT, dispatch next task | LISTENING |
-| LISTENING | TASK_RESULT (task already stored) | Log as duplicate, re-send ACK_RESULT | LISTENING |
-| LISTENING | TASK_RESULT (wrong worker, wrong address or invalid payload) | Log and drop | LISTENING |
-| LISTENING | Malformed packet (bad checksum, size or type) | Log and drop | LISTENING |
-| LISTENING | All 1,000 results stored, or 30 s idle timeout | Log summary, send STOP to workers | STOPPED |
+| WAITING_FOR_WORKERS | WORKER_JOIN (valid, new ID) | Register worker | WAITING_FOR_WORKERS |
+| WAITING_FOR_WORKERS | WORKER_JOIN (4th worker) | Register worker, dispatch one task to each worker, start timer | RUNNING |
+| WAITING_FOR_WORKERS / RUNNING | WORKER_JOIN (invalid ID, duplicate ID, or already 4 workers) | Log and reject | unchanged |
+| RUNNING | TASK_RESULT (valid, new task) | Store result, send ACK_RESULT, dispatch next task to that worker | RUNNING |
+| RUNNING | TASK_RESULT (task already stored) | Log as duplicate, re-send ACK_RESULT | RUNNING |
+| RUNNING | TASK_RESULT (unknown worker or invalid payload) | Log and drop | RUNNING |
+| any | Malformed packet (bad checksum, size or message type) | Log and drop | unchanged |
+| RUNNING | All 1,000 results stored | Log total time, send STOP to workers | STOPPED |
+| any | No packet received for 30 s | Log timeout, send STOP to workers | STOPPED |
 
 ### 2.5 Worker Finite-State Machine
 
 JOINING (WORKER_JOIN sent) -> WAITING (for a task) -> COMPUTING -> WAITING (after
-TASK_RESULT is sent) -> STOPPED (when STOP is received).
+TASK_RESULT is sent) -> STOPPED (when STOP is received). A worker ignores any task
+whose Worker ID is not its own.
 
 ### 2.6 Server State
 
-The server keeps a worker registry (Worker ID to address), a map of which task was
-assigned to which worker, a map of received results, and a counter for the next task
-in the queue. Every packet is logged to logs/server.log.
+The server keeps a worker registry (Worker ID to address), a map of received results
+keyed by Task ID, and a counter for the next task in the queue. Every packet is logged
+with a millisecond timestamp.
 
 ### 2.7 Phase 1 Assumptions and Phase 2 Extensions
 
-Loopback is assumed lossless in Phase 1, so no retransmission timers are used yet.
-The assignment map and the duplicate-result check are the foundation for Phase 2:
-timeout-based task reassignment, worker crash detection and exactly-once result
-handling.
-## 2. Message Types
-
-| Message Type | Value | Purpose |
-|---|---|---|
-| WORKER_JOIN | 1 | Worker announces that it has joined |
-| HEARTBEAT | 2 | Worker indicates that it is still active |
-| TASK_DISPATCH | 3 | Server sends a task to a worker |
-| TASK_RESULT | 4 | Worker returns a task result |
-| ACK_RESULT | 5 | Server acknowledges a task result |
+Loopback is assumed lossless in Phase 1, so no retransmission timers are used yet, and
+the server waits for all four workers before starting. The result map and the
+duplicate-result check are the foundation for Phase 2: timeout-based task
+reassignment, worker crash detection, starting without every worker, and
+exactly-once result handling.
 
 ## 3. Binary Header Format
 
