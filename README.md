@@ -234,6 +234,7 @@ Phase 2 will include heartbeat monitoring, worker crash detection, task reassign
 The Mini-RFC is available at:
 
 `docs/mini_rfc.md`
+Just right click the file and click "Open Preview"to view it.
 
 It describes the protocol introduction, architecture, communication flow, finite-state machines, and message formats.
 
