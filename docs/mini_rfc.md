@@ -50,7 +50,7 @@ The server then collects the results from all workers.
 
 ### 2.3 Sequence Flow
 
-```text
+```
 Worker                                      Server (127.0.0.1:5000)
   |                                               |
   |------ WORKER_JOIN (Worker_ID) --------------->| Register worker (no reply)
@@ -117,6 +117,40 @@ The sender sets Version to `1`. The receiver rejects messages containing unsuppo
 
 The payload immediately follows the header, beginning at byte offset 14.
 
+### 3.1 Message Types
+
+| Message Type | Value | Description |
+|---|---|---|
+| `WORKER_JOIN` | 1 | Worker registers with the server |
+| `HEARTBEAT` | 2 | Reserved for Phase 2 worker monitoring |
+| `TASK_DISPATCH` | 3 | Server sends a task to a worker |
+| `TASK_RESULT` | 4 | Worker sends the computed result |
+| `ACK_RESULT` | 5 | Server acknowledges the result |
+
+### 3.2 Sample Message
+
+Example of a `TASK_DISPATCH` message sent to Worker 1:
+
+| Field | Value |
+|---|---|
+| Version | 1 |
+| Message Type | 3 (`TASK_DISPATCH`) |
+| Task ID | 1 |
+| Worker ID | 1 |
+| Attempt Number | 1 |
+| Payload | `b"1:2"` |
+| Payload Checksum | CRC-32 of `b"1:2"` |
+
+Encoding example:
+
+```python
+message = encode_message(
+    MessageType.TASK_DISPATCH, 1, 1, 1, b"1:2"
+)
+```
+
+The message contains a 14-byte binary header followed by the 3-byte payload, giving a total size of 17 bytes.
+
 ## 4. Payload and Checksum
 
 The payload contains the message's application data and follows the header.
@@ -137,6 +171,6 @@ The receiver validates the header size, protocol version, message type, payload 
 
 ## 6. Implementation Status
 
-This document describes the current prototype. The header layout, field sizes, checksum algorithm, and message definitions must be confirmed with the project team before final integration.
+This document describes the current prototype. The header layout, field sizes, checksum algorithm, and message formats have been implemented and integrated with the server and workers. The Phase 1 baseline test successfully completed 1,000 tasks in each of five runs.
 
 The current protocol implementation uses `!BBIHHI`, giving a 14-byte header that includes the required Version field. Phase 2 reliability mechanisms remain subject to implementation and testing.
