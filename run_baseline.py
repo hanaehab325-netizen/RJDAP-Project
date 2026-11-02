@@ -1,66 +1,95 @@
-import argparse, json, os, subprocess, sys, time
+import subprocess
+import sys
+import time
+import re
+import csv
+from pathlib import Path
 
-ap = argparse.ArgumentParser()
-ap.add_argument("--host", default="127.0.0.1")
-ap.add_argument("--port", type=int, default=5000)
-ap.add_argument("--tasks", type=int, default=1000)
-ap.add_argument("--workers", type=int, default=4)
-ap.add_argument("--timeout", type=int, default=120)
-a = ap.parse_args()
+root = Path(__file__).resolve().parent
+logs = root / "logs"
+logs.mkdir(exist_ok=True)
+results = []
 
-run_dir = os.path.join("results", time.strftime("baseline_%Y%m%d_%H%M%S"))
-os.makedirs(run_dir)
-summary_file = os.path.join(run_dir, "summary.json")
-procs, logs = [], []
+for n in range(1, 6):
+    files = [open(logs / f"{name}_{n}.log", "w")
+             for name in ["server", "w1", "w2", "w3", "w4"]]
 
-def spawn(name, args):
-    log = open(os.path.join(run_dir, name + ".log"), "w")
-    logs.append(log)
-    p = subprocess.Popen([sys.executable] + args, stdout=log, stderr=subprocess.STDOUT)
-    procs.append(p)
-    return p
+    server = subprocess.Popen(
+        [sys.executable, "-u", "server.py"],
+        cwd=root, stdout=files[0], stderr=subprocess.STDOUT
+    )
+    workers = []
+    error = None
 
-ok = False
-try:
-    net = ["--host", a.host, "--port", str(a.port)]
-    server = spawn("server", ["server.py", *net, "--tasks", str(a.tasks),
-                              "--summary", summary_file])
-    time.sleep(1)  # let the server bind its socket
-    for i in range(1, a.workers + 1):
-        spawn(f"worker{i}", ["worker.py", "--id", str(i), *net])
+    try:
+        for _ in range(100):
+            if "waiting for 4 workers" in (logs / f"server_{n}.log").read_text():
+                break
+            if server.poll() is not None:
+                raise RuntimeError("Server failed to start")
+            time.sleep(0.1)
+        else:
+            raise TimeoutError("Server not ready")
 
-    start = time.time()
-    code = server.wait(timeout=a.timeout)
-    wall = time.time() - start
+        for i in range(1, 5):
+            workers.append(subprocess.Popen(
+                [sys.executable, "-u", "worker.py", str(i)],
+                cwd=root, stdout=files[i], stderr=subprocess.STDOUT
+            ))
 
-    with open(summary_file) as f:
-        s = json.load(f)
+        server.wait(timeout=60)
+        for worker in workers:
+            worker.wait(timeout=5)
 
-    checks = {
-        "server exit code 0": code == 0,
-        f"{a.tasks} tasks completed": s["completed"] == a.tasks,
-        "no reassignments": s["reassigned_task_count"] == 0,
-        "no duplicate results": s["duplicate_results_dropped"] == 0,
-    }
-    for name, passed in checks.items():
-        print(("PASS  " if passed else "FAIL  ") + name)
-    print(f"Wall time: {wall:.2f}s | Server time: {s['total_completion_time']}")
-    ok = all(checks.values())
-except subprocess.TimeoutExpired:
-    print(f"FAIL  timeout after {a.timeout}s")
-except (FileNotFoundError, KeyError, json.JSONDecodeError) as e:
-    print("FAIL  missing or invalid summary:", e)
-finally:
-    for p in procs:
-        if p.poll() is None:
-            p.terminate()
-    for p in procs:
-        try:
-            p.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            p.kill()
-    for l in logs:
-        l.close()
+    except (TimeoutError, subprocess.TimeoutExpired, RuntimeError) as e:
+        error = str(e)
 
-print("BASELINE:", "PASS" if ok else "FAIL", "| logs in", run_dir)
-sys.exit(0 if ok else 1)
+    finally:
+        for p in [server, *workers]:
+            if p.poll() is None:
+                p.kill()
+            p.wait()
+        for f in files:
+            f.close()
+
+    text = (logs / f"server_{n}.log").read_text()
+    worker_text = "".join(
+        (logs / f"w{i}_{n}.log").read_text() for i in range(1, 5)
+    )
+
+    tasks = re.findall(r"Task (\d+) done", text)
+    sums = re.findall(
+        r"Task (\d+): (\d+) \+ (\d+) = (\d+)", worker_text
+    )
+    duration = re.search(
+        r"All 1000 tasks completed in ([\d.]+)s", text
+    )
+
+    passed = (
+        error is None
+        and server.returncode == 0
+        and all(w.returncode == 0 for w in workers)
+        and len(workers) == 4
+        and len(tasks) == len(set(tasks)) == len(sums) == 1000
+        and len({t for t, a, b, c in sums}) == 1000
+        and all(int(a) == int(t) and int(b) == 2 * int(t)
+                and int(c) == 3 * int(t) for t, a, b, c in sums)
+        and all(f"Worker {i} registered:" in text for i in range(1, 5))
+        and text.count("SEND ACK_RESULT") == 1000
+        and duration is not None
+    )
+
+    status = "PASS" if passed else "FAIL"
+    seconds = duration.group(1) if duration else ""
+    results.append([n, status, seconds])
+    print(f"Run {n}: {status} | {len(tasks)}/1000 tasks")
+
+    if error:
+        print("Error:", error)
+
+with open(logs / "baseline_results.csv", "w", newline="") as f:
+    writer = csv.writer(f)
+    writer.writerow(["Run", "Status", "Seconds"])
+    writer.writerows(results)
+
+sys.exit(1 if any(r[1] == "FAIL" for r in results) else 0)
