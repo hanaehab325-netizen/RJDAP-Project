@@ -264,3 +264,7 @@ It describes the protocol introduction, architecture, communication flow, finite
 ## Phase 1 Demo Video
 
 Demo video link: **[Add video link here]**
+
+## GitHub Link that has all the files except for the logs/
+
+https://github.com/hanaehab325-netizen/RJDAP-Project
