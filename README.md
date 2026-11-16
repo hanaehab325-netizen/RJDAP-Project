@@ -10,15 +10,6 @@ In Phase 1, the server registers four workers, distributes 1,000 addition tasks,
 
 Advanced reliability features, including worker crash recovery and timeout-based task reassignment, will be implemented in Phase 2.
 
-## Technologies Used
-
-- Python 3
-- UDP sockets
-- Binary message encoding and decoding
-- CRC-32 checksums
-- Python `unittest` framework
-- VS Code
-
 ## Project Structure
 
 ```text
@@ -32,9 +23,9 @@ RJDAP-Project/
 ├── docs/
 │   └── mini_rfc.md
 ├── logs/
-├── server.log
 ├── README.md
-└── .gitignore
+├── server.log
+└──.gitignore
 ```
 
 ## Protocol Implementation
@@ -45,25 +36,25 @@ The `protocol.py` module defines the message types and provides functions for en
 
 | Message Type | Value | Description |
 |---|---|---|
-| `WORKER_JOIN` | 1 | Registers a worker with the server |
-| `HEARTBEAT` | 2 | Reserved for worker monitoring in Phase 2 |
+| `WORKER_JOIN`   | 1 | Registers a worker with the server |
+| `HEARTBEAT`     | 2 | Reserved for worker monitoring in Phase 2 |
 | `TASK_DISPATCH` | 3 | Sends a task to a worker |
-| `TASK_RESULT` | 4 | Sends the computed result to the server |
-| `ACK_RESULT` | 5 | Acknowledges receipt of a result |
+| `TASK_RESULT`   | 4 | Sends the computed result to the server |
+| `ACK_RESULT`    | 5 | Acknowledges receipt of a result |
 
 ### Binary Message Header
 
 The protocol uses the header format `!BBIHHI`, with a total size of 14 bytes.
 
-| Field | Size |
+| Field            | Size |
 |---|---|
-| Version | 1 byte |
-| Message Type | 1 byte |
-| Task ID | 4 bytes |
-| Worker ID | 2 bytes |
-| Attempt Number | 2 bytes |
+| Version          | 1 byte |
+| Message Type     | 1 byte |
+| Task ID          | 4 bytes |
+| Worker ID        | 2 bytes |
+| Attempt Number   | 2 bytes |
 | Payload Checksum | 4 bytes |
-| **Total** | **14 bytes** |
+| **Total**        | **14 bytes** |
 
 The `!` prefix specifies network byte order (big-endian). The current protocol version is 1.
 
@@ -103,7 +94,7 @@ For example:
 
 ### Requirements
 
-- Python 3 installed.
+- Python language installed.
 - VS Code or another code editor.
 - All project files in the correct folders.
 
@@ -138,28 +129,6 @@ python worker.py 4
 ```
 
 The server starts dispatching tasks after all four workers have registered.
-
-### Automated Baseline Test
-
-The `run_baseline.py` script automatically starts the server and four workers.
-
-To run the test:
-
-```bash
-python run_baseline.py
-```
-
-The script performs five baseline runs and checks:
-
-- Registration of four workers.
-- Completion of all 1,000 tasks.
-- Correct calculation results.
-- Task IDs and duplicate task detection.
-- Result acknowledgments.
-
-The script saves server and worker logs for each run in the `logs/` folder.
-
-It also creates `logs/baseline_results.csv` containing the status and completion time of each run.
 
 ## Testing
 
@@ -263,7 +232,7 @@ It describes the protocol introduction, architecture, communication flow, finite
 
 ## Phase 1 Demo Video
 
-Demo video link: **[Add video link here]**
+Demo video link: https://drive.google.com/file/d/14J9RViATG0GhCXynDOJqFwaoR5SqT8R7/view?usp=sharing
 
 ## GitHub Link that has all the files except for the logs/
 
