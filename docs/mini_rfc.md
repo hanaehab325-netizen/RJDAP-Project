@@ -1,3 +1,4 @@
+
 # RJDAP Mini-RFC
 
 ## 1. Introduction
@@ -38,7 +39,7 @@ The server then collects the results from all workers.
 
 ### 2.1 Entities
 
-**Server (Command Hub).** A single UDP socket bound to `127.0.0.1:5000`. It registers exactly four workers, owns a queue of 1,000 tasks, dispatches tasks, acknowledges results, and logs every sent and received packet with a timestamp to the console and to `server.log`.
+**Server (Command Hub).** A single UDP socket bound to `127.0.0.1:5000`. It registers exactly four workers, owns a queue of 1,000 tasks, dispatches tasks, acknowledges results, and logs protocol communication events with timestamps in the console and `server.log`.
 
 **Worker (compute node).** Four worker processes. Each worker is started with its own Worker ID (1 to 4), joins the server, executes the assigned computation (adding two integers), and returns the result.
 
@@ -50,18 +51,16 @@ The server then collects the results from all workers.
 
 ### 2.3 Sequence Flow
 
-```
-Worker                                      Server (127.0.0.1:5000)
-  |                                               |
-  |------ WORKER_JOIN (Worker_ID) --------------->| Register worker (no reply)
-  |        ... all 4 workers join ...             |
-  |<----- TASK_DISPATCH (Task_ID, "a:b") ---------| Sent once 4 workers are registered
-  | [compute a + b]                               |
-  |------ TASK_RESULT (sum) --------------------->| Validate and store result
-  |<----- ACK_RESULT -----------------------------|
-  |<----- TASK_DISPATCH (next task) --------------| Repeat until all 1,000 are done
-  |<----- STOP -----------------------------------| All results received; worker exits
-```
+    Worker                                         Server (127.0.0.1:5000)
+      |                                                    |
+      |------ WORKER_JOIN (Worker_ID) --------------------->| Register worker (no reply)
+      |          ... all 4 workers join ...                |
+      |<----- TASK_DISPATCH (Task_ID, "a:b") ---------------| Sent once 4 workers are registered
+      | [compute a + b]                                    |
+      |------ TASK_RESULT (sum) --------------------------->| Parse and store result
+      |<----- ACK_RESULT -----------------------------------|
+      |<----- TASK_DISPATCH (next task) --------------------| Repeat until all 1,000 are done
+      |<----- STOP -----------------------------------------| All results received; worker exits
 
 The server does not start dispatching until all four workers have joined. After that, it sends one task at a time to each worker and sends the next task only after it has received and acknowledged the previous result, so faster workers handle more tasks.
 
@@ -89,22 +88,16 @@ A worker ignores any task whose Worker ID is not its own.
 
 ### 2.6 Server State
 
-The server keeps a worker registry (Worker ID to address), a map of received results keyed by Task ID, and a counter for the next task in the queue. Every packet is logged with a millisecond timestamp.
+The server keeps a worker registry (Worker ID to address), a map of received results keyed by Task ID, and a counter for the next task in the queue. Protocol events are logged with millisecond timestamps.
 
-### 2.7 Phase 1 Assumptions and Phase 2 Extensions
-
-Loopback is assumed lossless in Phase 1, so no retransmission timers are used yet, and the server waits for all four workers before starting.
-
-The result map and duplicate-result check are the foundation for Phase 2: timeout-based task reassignment, worker crash detection, starting without every worker, and exactly-once result handling.
-
-## 3. Binary Header Format
+## 3. Message Formats
 
 The RJDAP header uses the Python `struct` format `!BBIHHI`.
 
 The `!` specifies network byte order (big-endian), with standard field sizes and no padding. The Version field identifies the protocol version; the current supported version is `1`.
 
 | Field | Format | Size | Start Offset | End Offset | Description |
-|---|---|---:|---:|---:|---|
+|---|---|---|---:|---:|---|
 | Version | `B` | 1 byte | 0 | 0 | Identifies the protocol version |
 | Message Type | `B` | 1 byte | 1 | 1 | Identifies the message |
 | Task ID | `I` | 4 bytes | 2 | 5 | Identifies the task |
@@ -143,15 +136,13 @@ Example of a `TASK_DISPATCH` message sent to Worker 1:
 
 Encoding example:
 
-```python
-message = encode_message(
-    MessageType.TASK_DISPATCH, 1, 1, 1, b"1:2"
-)
-```
+    message = encode_message(
+        MessageType.TASK_DISPATCH, 1, 1, 1, b"1:2"
+    )
 
 The message contains a 14-byte binary header followed by the 3-byte payload, giving a total size of 17 bytes.
 
-## 4. Payload and Checksum
+### 3.3 Payload and Checksum
 
 The payload contains the message's application data and follows the header.
 
@@ -161,7 +152,7 @@ The sender calculates a CRC-32 checksum over the payload and places the checksum
 
 The checksum detects accidental payload corruption but does not guarantee packet delivery or authenticate the sender.
 
-## 5. Encoding and Decoding
+### 3.4 Encoding and Decoding
 
 The sender serializes the header fields using Python's `struct.pack()`.
 
@@ -169,8 +160,12 @@ The receiver extracts the header and payload, then uses `struct.unpack()` to dec
 
 The receiver validates the header size, protocol version, message type, payload size, and checksum before accepting the message.
 
-## 6. Implementation Status
+### 3.5 Design Justification
 
-This document describes the current prototype. The header layout, field sizes, checksum algorithm, and message formats have been implemented and integrated with the server and workers. The Phase 1 baseline test successfully completed 1,000 tasks in each of five runs.
+The header combines task identification and result tracking for a small UDP-based computation service. Two design choices are:
 
-The current protocol implementation uses `!BBIHHI`, giving a 14-byte header that includes the required Version field. Phase 2 reliability mechanisms remain subject to implementation and testing.
+1. **Task and attempt identification:** Task ID names the computation, while Attempt Number distinguishes dispatch attempts. The current baseline uses Attempt Number 1; reassignment is planned for Phase 2.
+
+2. **Result tracking with acknowledgment:** The server stores one result per Task ID. Repeated results are not counted again, and the server can acknowledge an already recorded task again.
+
+These choices are tailored to task dispatch and aggregation. They are not claims that general acknowledgments or task IDs are new inventions.
